@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "petina"
+version = "0.0.10"
+authors = [
+  { name="Sharmin", email="sharmin.afrose.vt@gmail.com" },
+]
+description = "package for applying privacy techniques"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
