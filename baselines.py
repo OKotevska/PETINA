@@ -4,472 +4,758 @@ import torch
 import numpy as np
 from scipy import stats as st
 
-# This class has the baseline models
+# This module provides a collection of functions for data processing, differential privacy mechanisms,
+# encoding, perturbation, clipping, and pruning. It supports data types such as Python lists, NumPy arrays, and PyTorch tensors.
+
+# -------------------------------
+# Utility functions for type conversion
+# -------------------------------
 
 def type_checking_and_return_lists(domain):
+    """
+    Converts the input data (tensor, numpy array, or list) to a list and returns its shape (if applicable).
+
+    Parameters:
+        domain: Input data (torch.Tensor, np.ndarray, or list)
+
+    Returns:
+        items: A list representation of the input data.
+        shape: Original shape information (for tensors and numpy arrays; 0 for lists).
+    """
     if isinstance(domain, torch.Tensor):
-        items, shape = torch_to_list(domain)
+        items, shape = torch_to_list(domain)  # Convert torch tensor to list
     elif isinstance(domain, np.ndarray):
-        items, shape = numpy_to_list(domain)
+        items, shape = numpy_to_list(domain)  # Convert numpy array to list
     elif isinstance(domain, list):
         items = domain
-        shape = 0 # no use
+        shape = 0  # Shape information is not used for plain lists
     else:
         raise ValueError("only takes list, ndarray, tensor type")
     
     return items, shape
 
-def type_checking_return_actual_dtype(domain,result, shape):
+def type_checking_return_actual_dtype(domain, result, shape):
+    """
+    Converts a processed list back to the original data type of 'domain'.
+
+    Parameters:
+        domain: The original input data (to check its type).
+        result: The processed data as a list.
+        shape: The shape information for conversion (if applicable).
+
+    Returns:
+        The result converted back to the original data type.
+    """
     if isinstance(domain, torch.Tensor):
-        return list_to_torch(result, shape)
+        return list_to_torch(result, shape)  # Convert list back to torch tensor
     elif isinstance(domain, np.ndarray):
-        return list_to_numpy(result, shape)
-    else:  # list type
+        return list_to_numpy(result, shape)  # Convert list back to numpy array
+    else:  # If input was a list, return the list as is
          return result
-    
+
+# -------------------------------
+# Differential Privacy Mechanisms
+# -------------------------------
 
 def applyFlipCoin(probability, domain):
     """
-    Applies a "flip coin" mechanism to each item in a list based on a given probability.
+    Applies a "flip coin" mechanism to each item in the input domain.
+    For each item, with a probability 'probability', the original item is kept.
+    Otherwise, a random integer between the minimum and maximum of the list is used.
 
     Parameters:
-        probability (float): Probability (between 0 and 1) of returning `True` for each item.
-        items (list): List of items to which the flip coin mechanism will be applied.
+        probability (float): Probability (between 0 and 1) to keep the original item.
+        domain: Input data (list, numpy array, or tensor).
 
     Returns:
-        list of bool: A list indicating `True` or `False` for each item in `items` based on the probability.
+        Data with each item either preserved or replaced with a random value,
+        in the same format as the input.
     """
-
-    
+    # Ensure the probability is valid.
     if not 0 <= probability <= 1:
         raise ValueError("Probability must be between 0 and 1.")
     
+    # Convert input data to list.
     items, shape = type_checking_and_return_lists(domain)
     
-   
+    # Create a list of boolean values; True with probability 'probability'
     prob = [np.random.rand() < probability for _ in items]
 
     result = []
+    # Determine the minimum and maximum values in the list for random replacement.
     item_min = min(items)
     item_max = max(items)
+    
+    # For each item, decide whether to keep it or replace it with a random value.
     for p, n in zip(prob, items):
         if p == True:
-            result.append(n)
+            result.append(n)  # Keep the original value
         else:
-            result.append(random.randint(item_min, item_max))
+            result.append(random.randint(item_min, item_max))  # Replace with random integer
 
-    return type_checking_return_actual_dtype(domain,result, shape)
-
-    
-   
-    
+    # Convert the result back to the original data type.
+    return type_checking_return_actual_dtype(domain, result, shape)
 
 def applyDPGaussian(domain, delta=10e-5, epsilon=1, gamma=1):
     """
-    Applies Gaussian noise to the input data to achieve differential privacy.
+    Applies Gaussian noise to the input data for differential privacy.
 
     Parameters:
-        data (np.ndarray): A NumPy array of values to which noise will be added.
-        delta (float): Failure probability, typically a small value (default: 1e-5).
-        epsilon (float): Privacy parameter, controls the level of noise added (default: 1.0).
-        gamma (float): privacy parameter scaling (lower value means less noise)
+        domain: Input data (list, numpy array, or tensor).
+        delta (float): Failure probability (default: 1e-5).
+        epsilon (float): Privacy parameter (default: 1.0).
+        gamma (float): Scaling factor for noise (default: 1).
 
     Returns:
-        np.ndarray: The data with added Gaussian noise for differential privacy.
+        Data with added Gaussian noise in the same format as the input.
     """
-    
     data, shape = type_checking_and_return_lists(domain)
 
+    # Calculate the standard deviation for the Gaussian noise.
     sigma = np.sqrt(2 * np.log(1.25 / delta)) * gamma / epsilon
+    # Add Gaussian noise to each data point.
     privatized = data + np.random.normal(loc=0, scale=sigma, size=len(data))
 
     return type_checking_return_actual_dtype(domain, privatized, shape)
 
-    
+def applyRDPGaussian(domain, sensitivity=1, alpha=10, epsilon_bar=1):
+    """
+    Applies Gaussian noise using the Rényi Differential Privacy (RDP) mechanism.
+
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        sensitivity (float): Sensitivity of the data (default: 1).
+        alpha (float): RDP parameter (default: 10).
+        epsilon_bar (float): Privacy parameter (default: 1).
+
+    Returns:
+        Data with added Gaussian noise.
+    """
+    data, shape = type_checking_and_return_lists(domain)
+    # Calculate sigma based on sensitivity, alpha, and epsilon_bar.
+    sigma = np.sqrt((sensitivity**2 * alpha) / (2 * epsilon_bar))
+    # Add Gaussian noise for each element.
+    privatized = [v + np.random.normal(loc=0, scale=sigma) for v in data]   
+
+    return type_checking_return_actual_dtype(domain, privatized, shape)
 
 def applyDPExponential(domain, sensitivity=1, epsilon=1, gamma=1.0):
     """
-    A function that returns values with exponential Noise'
+    Applies exponential noise to the input data for differential privacy.
 
-    Input:
-        value: A list of values
-        sensitivity: maximum amount by which a single individual's data can influence the output of a function. (default=1)
-        epsilon: Privacy Parameter (default=1)
-        gamma: privacy parameter scaling (lower value means less noise)
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        sensitivity: Maximum change by a single individual's data (default: 1).
+        epsilon: Privacy parameter (default: 1).
+        gamma: Scaling factor for noise (default: 1.0).
+
     Returns:
-        str: A privatized list of values
+        Data with added exponential noise in the same format as the input.
     """
     data, shape = type_checking_and_return_lists(domain)
 
-    # Calculate the scale of the exponential distribution
+    # Determine the scale for the exponential distribution.
     scale = sensitivity * gamma / epsilon
 
-    # Generate exponential noise (symmetric around 0)
+    # Generate exponential noise and randomly flip its sign to create a symmetric noise distribution.
     noise = np.random.exponential(scale, size=len(data))
-    signs = np.random.choice([-1, 1], size=len(data))  # Randomly flip signs
+    signs = np.random.choice([-1, 1], size=len(data))
     noise = noise * signs
 
-    # Add noise to the original data
+    # Add the noise to the original data.
     privatized = np.array(data) + noise
 
-    # convert back to list 
+    # Convert the result back to a list.
     privatized = privatized.tolist()
 
     return type_checking_return_actual_dtype(domain, privatized, shape)
 
 def applyDPLaplace(domain, sensitivity=1, epsilon=1, gamma=1):
     """
-    A function that returns values with laplace Noise'
+    Applies Laplace noise to the input data for differential privacy.
 
-    Input:
-        value: A list of values
-        sensitivity: maximum amount by which a single individual's data can influence the output of a function. (default=1)
-        epsilon: Privacy Parameter (default=1)
-        gamma (float): privacy parameter scaling (lower value means less noise)
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        sensitivity: Maximum change by a single individual's data (default: 1).
+        epsilon: Privacy parameter (default: 1).
+        gamma: Scaling factor for noise (default: 1).
+
     Returns:
-        str: A privatized list of values
+        Data with added Laplace noise in the same format as the input.
     """
     data, shape = type_checking_and_return_lists(domain)
-    privatized = data + np.random.laplace(loc=0, scale=sensitivity*gamma/epsilon, size=len(data))
+    # Add Laplace noise to each element.
+    privatized = data + np.random.laplace(loc=0, scale=sensitivity * gamma / epsilon, size=len(data))
 
     return type_checking_return_actual_dtype(domain, privatized, shape)
 
+# -------------------------------
+# Encoding and Perturbation Functions
+# -------------------------------
 
 def encode(response, domain):
-    #print([1 if d == response else 0 for d in domain])
+    """
+    Encodes a response into a one-hot representation with respect to the domain.
+
+    Parameters:
+        response: The value to encode.
+        domain: The set of possible values.
+
+    Returns:
+        A list with 1 where the domain element equals the response, else 0.
+    """
     return [1 if d == response else 0 for d in domain]
 
-
 def perturb_bit(bit, p, q):
-    # p = .75
-    # q = .25
+    """
+    Perturbs a single bit using random response.
 
-    sample = np.random.random()
+    Parameters:
+        bit (int): The binary bit (0 or 1).
+        p (float): Probability of keeping 1 as 1.
+        q (float): Probability of flipping 0 to 1.
+
+    Returns:
+        The perturbed bit.
+    """
+    sample = np.random.random()  # Generate a random float in [0, 1)
     if bit == 1:
-        if sample <= p:
-            return 1
-        else:
-            return 0
+        return 1 if sample <= p else 0
     elif bit == 0:
-        if sample <= q:
-            return 1
-        else:
-            return 0
+        return 1 if sample <= q else 0
 
 def perturb(encoded_response, p, q):
+    """
+    Applies perturbation to an entire encoded response vector.
+
+    Parameters:
+        encoded_response (list): A list of binary bits.
+        p, q (float): Perturbation probabilities.
+
+    Returns:
+        A perturbed version of the encoded response.
+    """
     return [perturb_bit(b, p, q) for b in encoded_response]
 
-def aggregate(responses, p= .75, q= .25):
-    # p = .75
-    # q = .25
+def aggregate(responses, p=0.75, q=0.25):
+    """
+    Aggregates a list of perturbed responses to estimate the original counts.
 
-    sums = np.sum(responses, axis=0)
+    Parameters:
+        responses (list of lists): Perturbed one-hot encoded responses.
+        p (float): Probability parameter used during perturbation.
+        q (float): Secondary probability parameter used during perturbation.
+
+    Returns:
+        A list of estimated counts for each element in the domain.
+    """
+    sums = np.sum(responses, axis=0)  # Sum across all responses
     n = len(responses)
-
-    return [(v - n*q) / (p-q) for v in sums]
+    # Adjust the sums to compensate for the random response mechanism.
+    return [(v - n * q) / (p - q) for v in sums]
 
 def unaryEncoding(value, p=0.75, q=0.25):
     """
-    Applies unary encoding with differential privacy to a given domain, using random response perturbation 
-    to create privatized responses based on specified probabilities `p` and `q`.
+    Applies unary encoding with differential privacy.
+    Each value is encoded as a one-hot vector, perturbed, and then aggregated.
 
     Parameters:
-        domain (list): A list of discrete values representing the input domain to be encoded and perturbed.
-        p (float): The probability of keeping an encoded bit as `True` during perturbation. Default is 0.75.
-        q (float): The probability of flipping an encoded bit to `True` when it is actually `False`. Default is 0.25.
+        value: Input data (list, numpy array, or tensor).
+        p (float): Probability of keeping an encoded bit unchanged.
+        q (float): Probability of flipping an encoded bit to 1 when it is 0.
 
     Returns:
-        list: A list of counts for each value in the `domain`, representing the privatized responses 
-              after applying unary encoding and perturbation.
+        A list of tuples pairing each unique value with its privatized count.
     """
-
+    # Convert input data to list.
     domain, _ = type_checking_and_return_lists(value)
+    # Get unique values in the domain.
     unique_domain = list(set(domain))
    
-    responses = [perturb(encode(r, unique_domain), p, q) for r in domain]   
+    # For each value, encode and perturb it.
+    responses = [perturb(encode(r, unique_domain), p, q) for r in domain]
+    # Aggregate perturbed responses.
     counts = aggregate(responses, p, q)
-    t = list(zip(unique_domain, counts))     # t = pairwise original and perturbed count values
-
+    # Zip unique values with their estimated counts.
+    t = list(zip(unique_domain, counts))
+    
     return t
 
-# compute q given p and epsilon
-def get_q( p, eps):
-    # Want p(1-q)/q(1-p) = exp(eps)
-    # I.e q^{-1} -1 = (1-q)/q = exp(eps) * (1-p)/p
-    qinv = 1 + (math.exp(eps) * (1.0-p)/ p)
+# -------------------------------
+# Parameter Calculation Helpers
+# -------------------------------
+
+def get_q(p, eps):
+    """
+    Computes q given p and epsilon based on the relation:
+    p(1-q) / q(1-p) = exp(eps)
+
+    Parameters:
+        p (float): Probability of keeping a bit.
+        eps (float): Privacy parameter.
+
+    Returns:
+        q (float): Computed probability.
+    """
+    qinv = 1 + (math.exp(eps) * (1.0 - p) / p)
     q = 1.0 / qinv
     return q
 
-# Implementation from: https://github.com/apple/ml-projunit/blob/main/utilities.py 
-# compute sigma for gaussian given
-def get_gamma_sigma( p, eps):
-    # Want p(1-q)/q(1-p) = exp(eps)
-    # I.e q^{-1} -1 = (1-q)/q = exp(eps) * (1-p)/p
-    qinv = 1 + (math.exp(eps) * (1.0-p)/ p)
+def get_gamma_sigma(p, eps):
+    """
+    Computes gamma and sigma parameters for the Gaussian mechanism.
+
+    Parameters:
+        p (float): Probability parameter.
+        eps (float): Privacy parameter.
+
+    Returns:
+        gamma (float): Threshold value derived from the inverse survival function.
+        sigma (float): Noise scaling factor.
+    """
+    qinv = 1 + (math.exp(eps) * (1.0 - p) / p)
     q = 1.0 / qinv
-    gamma = st.norm.isf(q)
-    # Now the expected dot product is (1-p)*E[N(0,1)|<gamma] + pE[N(0,1)|>gamma]
-    # These conditional expectations are given by pdf(gamma)/cdf(gamma) and pdf(gamma)/sf(gamma)
-    unnorm_mu = st.norm.pdf(gamma) * (-(1.0-p)/st.norm.cdf(gamma) + p/st.norm.sf(gamma))
-    sigma = 1./unnorm_mu
+    gamma = st.norm.isf(q)  # Inverse survival function of standard normal
+    # Compute conditional expectation adjustments.
+    unnorm_mu = st.norm.pdf(gamma) * (-(1.0 - p) / st.norm.cdf(gamma) + p / st.norm.sf(gamma))
+    sigma = 1.0 / unnorm_mu
     return gamma, sigma
 
-# implementation from: https://github.com/apple/ml-projunit/blob/main/utilities.py#L194
-def get_p( eps, return_sigma=False):
-    # Mechanism:
-    # With probability p, sample a Gaussian conditioned on g.x \geq gamma
-    # With probability (1-p), sample conditioned on g.x \leq gamma
-    # Scale g appropriately to get the expectation right
-    # Let q(gamma) = Pr[g.x \geq gamma] = Pr[N(0,1) \geq gamma] = st.norm.sf(gamma)
-    # Then density for x above threshold = p(x)  * p/q(gamma)
-    # And density for x below threhsold = p(x) * (1-p)/(1-q(gamma))
-    # Thus for a p, gamma is determined by the privacy constraint.
+def get_p(eps, return_sigma=False):
+    """
+    Determines the optimal probability p for a given epsilon by searching a range
+    and selecting the one with minimum sigma (noise scale).
+
+    Parameters:
+        eps (float): Privacy parameter.
+        return_sigma (bool): If True, also return the corresponding sigma.
+
+    Returns:
+        Optimal p value (and sigma if return_sigma is True).
+    """
     plist = np.arange(0.01, 1.0, 0.01)
     glist = []
     slist = []
     for p in plist:
         gamma, sigma = get_gamma_sigma(p, eps)
-        # thus we have to scale this rv by sigma to get it to be unbiased
-        # The variance proxy is then d sigma^2
-        slist.append(sigma)
         glist.append(gamma)
+        slist.append(sigma)
     ii = np.argmin(slist)
     if return_sigma:
         return plist[ii], slist[ii]
     else:
         return plist[ii]
-    
-# preserves epsilon-differential privacy (returns the exact value, not the noisy value)
-# Sparse Vector technique (SVT) -- implementation from https://programming-dp.com/ch10.html 
-def above_threshold_SVT( val, domain, T, epsilon):
+
+# -------------------------------
+# Sparse Vector Technique (SVT)
+# -------------------------------
+
+def above_threshold_SVT(val, domain, T, epsilon):
+    """
+    Implements the Sparse Vector Technique (SVT) for differential privacy.
+    Returns the actual value if the noisy value exceeds a threshold; otherwise,
+    returns a random value from the domain.
+
+    Parameters:
+        val (float): The value to check against the threshold.
+        domain: Input data (list, numpy array, or tensor) used as a fallback.
+        T (float): The threshold value.
+        epsilon (float): Privacy parameter.
+
+    Returns:
+        The original value if the condition is met; otherwise, a random value from domain.
+    """
     possible_val_list, shape = type_checking_and_return_lists(domain)
-    T_hat = T + np.random.laplace(loc=0, scale = 2/epsilon)
+    T_hat = T + np.random.laplace(loc=0, scale=2 / epsilon)  # Noisy threshold
     
-    nu_i = np.random.laplace(loc=0, scale = 4/epsilon)
+    nu_i = np.random.laplace(loc=0, scale=4 / epsilon)  # Noise added to the value
     if val + nu_i >= T_hat:
         return val
-    # if the algorithm "fails", return a random val from possible val list
-    # more convenient in certain use cases
+    # Fallback: return a random value if the threshold condition is not met.
     return random.choice(possible_val_list)
-    
 
+# -------------------------------
+# Additional Perturbation and Aggregation Methods
+# -------------------------------
 
-def she_perturb_bit( bit, epsilon = 0.1):
-    return bit + np.random.laplace(loc=0, scale = 2 / epsilon)
+def she_perturb_bit(bit, epsilon=0.1):
+    """
+    Perturbs a single bit using Laplace noise.
 
+    Parameters:
+        bit (float/int): The bit value.
+        epsilon (float): Privacy parameter.
 
-def she_perturbation( encoded_response, epsilon = 0.1):
+    Returns:
+        Perturbed bit.
+    """
+    return bit + np.random.laplace(loc=0, scale=2 / epsilon)
+
+def she_perturbation(encoded_response, epsilon=0.1):
+    """
+    Applies Laplace noise to each element of an encoded response.
+
+    Parameters:
+        encoded_response (list): A list of bits.
+        epsilon (float): Privacy parameter.
+
+    Returns:
+        List of perturbed bits.
+    """
     return [she_perturb_bit(b, epsilon) for b in encoded_response]
 
+def the_perturb_bit(bit, epsilon=0.1, theta=1.0):
+    """
+    Perturbs a single bit, thresholds the result, and returns either 1.0 or 0.0.
 
-def the_perturb_bit( bit, epsilon = 0.1, theta = 1.0):
-    val = bit + np.random.laplace(loc=0, scale = 2 / epsilon)
-    
-    if val > theta:
-        return 1.0
-    else:
-        return 0.0
+    Parameters:
+        bit (float/int): The bit value.
+        epsilon (float): Privacy parameter.
+        theta (float): Threshold parameter.
 
-def the_perturbation( encoded_response, epsilon = 0.1, theta = 1.0):
+    Returns:
+        1.0 if the perturbed value exceeds theta, otherwise 0.0.
+    """
+    val = bit + np.random.laplace(loc=0, scale=2 / epsilon)
+    return 1.0 if val > theta else 0.0
+
+def the_perturbation(encoded_response, epsilon=0.1, theta=1.0):
+    """
+    Applies the threshold-based perturbation to an encoded response.
+
+    Parameters:
+        encoded_response (list): A list of bits.
+        epsilon (float): Privacy parameter.
+        theta (float): Threshold value.
+
+    Returns:
+        List of perturbed bits (either 0.0 or 1.0).
+    """
     return [the_perturb_bit(b, epsilon, theta) for b in encoded_response]
 
+def the_aggregation_and_estimation(answers, epsilon=0.1, theta=1.0):
+    """
+    Aggregates the perturbed answers and estimates the original counts.
 
-def the_aggregation_and_estimation( answers, epsilon = 0.1, theta = 1.0):
-    p = 1 - 0.5 * pow(math.e, epsilon / 2 * (1.0 - theta))
-    q = 0.5 * pow(math.e, epsilon / 2 * (0.0 - theta))
+    Parameters:
+        answers (list of lists): Perturbed responses.
+        epsilon (float): Privacy parameter.
+        theta (float): Threshold parameter.
+
+    Returns:
+        A list of estimated counts as integers.
+    """
+    # Compute the probabilities based on epsilon and theta.
+    p = 1 - 0.5 * math.exp(epsilon / 2 * (1.0 - theta))
+    q = 0.5 * math.exp(epsilon / 2 * (0.0 - theta))
     
     sums = np.sum(answers, axis=0)
     n = len(answers)
     
-    return [int((i - n * q) / (p-q)) for i in sums] 
-    
+    # Adjust the sums to recover the original counts.
+    return [int((i - n * q) / (p - q)) for i in sums]
 
-# implementation from https://livebook.manning.com/book/privacy-preserving-machine-learning/chapter-4/v-4/103
+# -------------------------------
+# Histogram Encoding Methods
+# -------------------------------
+
 def histogramEncoding(value):
+    """
+    Implements histogram encoding with differential privacy using Laplace perturbation.
+    
+    Parameters:
+        value: Input data (list, numpy array, or tensor).
 
+    Returns:
+        Privatized counts corresponding to the input data.
+    """
     domain, shape = type_checking_and_return_lists(value)
 
+    # Perturb the one-hot encoded responses for each element.
     responses = [she_perturbation(encode(r, domain)) for r in domain]
     counts = aggregate(responses)
     t = list(zip(domain, counts))
-    # print(t)
-    privatized = []
-    for i in range(len(t)):
-        privatized.append(t[i][1])
+    
+    privatized = [count for _, count in t]
 
-        
+    return type_checking_return_actual_dtype(value, privatized, shape)
 
-    return type_checking_return_actual_dtype(value,privatized, shape)
+def histogramEncoding_t(value):
+    """
+    An alternative histogram encoding using threshold-based perturbation and aggregation.
+    
+    Parameters:
+        value: Input data (list, numpy array, or tensor).
 
-
-def histogramEncoding_t( value):
-
+    Returns:
+        Estimated counts derived from the perturbed responses.
+    """
     domain, shape = type_checking_and_return_lists(value)
-    #responses = [she_perturbation(encode(r, domain)) for r in domain]
-    #she_estimated_answers = np.sum([she_perturbation(encoding(r)) for r in adult_age], axis=0)
+    # Apply threshold-based perturbation to the one-hot encoding.
     the_perturbed_answers = [the_perturbation(encode(r, domain)) for r in domain]
+    # Estimate the original counts.
     estimated_answers = the_aggregation_and_estimation(the_perturbed_answers)
-    # counts = aggregate(responses)
-    # t = list(zip(domain, counts))
-    # privatized = []
-    # for i in range(len(t)):
-    #     privatized.append(t[i][1])
-
+    
     return type_checking_return_actual_dtype(value, estimated_answers, shape)
 
+# -------------------------------
+# Clipping Functions
+# -------------------------------
 
-# clipping
-# tutorial on TensorFlow, Keras and PyTorch: https://neptune.ai/blog/understanding-gradient-clipping-and-how-it-can-fix-exploding-gradients-problem
-def applyClipping( value, clipping):
+def applyClipping(value, clipping):
+    """
+    Applies simple clipping to each element in the list.
+    If a value is above the clipping threshold, it is set to the threshold.
+
+    Parameters:
+        value (list): A list of numerical values.
+        clipping (float): The clipping threshold.
+
+    Returns:
+        A list of clipped values.
+    """
     clipped = []
     for i in range(len(value)):
-        if (value[i] >= clipping):
+        if value[i] >= clipping:
             clipped.append(clipping)
         else:
             clipped.append(value[i])
-
     return clipped
-
 
 def applyClippingAdaptive(domain):
     """
-    Applies adaptive clipping to the input data based on lower quantile value of 0.05.
+    Applies adaptive clipping based on the lower 5th percentile of the data.
+    This ensures that the lower tail of the distribution is used as a clipping threshold.
 
     Parameters:
-        domain (list, array-like or tensor): The dataset to process.
-        
+        domain: Input data (list, array-like, or tensor).
+
     Returns:
-        list, array-like or tensor: The data with adaptive clipping applied.
+        Data with adaptive clipping applied, in the same format as the input.
     """
     value, shape = type_checking_and_return_lists(domain)
     
     lower_quantile = 0.05
     lower = np.quantile(value, lower_quantile)
     
+    # Clip values between the lower bound and the maximum value.
     clipped_data = np.clip(value, lower, np.max(value))
     clipped_data = clipped_data.tolist()
 
     return type_checking_return_actual_dtype(domain, clipped_data, shape)
 
+def applyClippingDP(domain, clipping, sensitivity, epsilon):
+    """
+    Applies clipping with differential privacy.
+    First, values are clipped; then Laplace noise is added.
 
-# clipping with DP - read the paper referenced above for more info
-# check the funtionality code using this code https://medium.com/pytorch/differential-privacy-series-part-1-dp-sgd-algorithm-explained-12512c3959a3
-def applyClippingDP( domain, clipping, sensitivity, epsilon):
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        clipping (float): Clipping threshold.
+        sensitivity (float): Sensitivity of the data.
+        epsilon (float): Privacy parameter.
+
+    Returns:
+        Data with differentially private clipping applied.
+    """
     value, shape = type_checking_and_return_lists(domain)
     tmpValue = applyClipping(value, clipping)
     privatized = []
     for i in range(len(tmpValue)):
-        privatized.append(tmpValue[i] + np.random.laplace(loc=0, scale = sensitivity/epsilon))
+        privatized.append(tmpValue[i] + np.random.laplace(loc=0, scale=sensitivity / epsilon))
         
-
     return type_checking_return_actual_dtype(domain, privatized, shape)
 
-# pruning
-# implementation from here https://www.ecva.net/papers/eccv_2020/papers_ECCV/papers/123700324.pdf
-def applyPruning( domain, prune_ratio):
+# -------------------------------
+# Pruning Functions
+# -------------------------------
+
+def applyPruning(domain, prune_ratio):
+    """
+    Applies pruning to reduce the magnitude of values.
+    Values with an absolute value below the prune_ratio may be set to 0 or pruned to the prune_ratio.
+
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        prune_ratio (float): Threshold below which values are pruned.
+
+    Returns:
+        Pruned data in the same format as the input.
+    """
     value, shape = type_checking_and_return_lists(domain)
-    rnd_tmp = 1
     pruned = []
     for i in range(len(value)):
-        if (abs(value[i]) < prune_ratio):
+        if abs(value[i]) < prune_ratio:
             rnd_tmp = random.random()
-            if (abs(value[i]) > rnd_tmp * prune_ratio):
-                if (value[i] > 0):
+            if abs(value[i]) > rnd_tmp * prune_ratio:
+                # Set to prune_ratio preserving the sign.
+                if value[i] > 0:
                     pruned.append(prune_ratio)
                 else:
                     pruned.append(-prune_ratio)
             else:
                 pruned.append(0)
-
-    return  type_checking_return_actual_dtype(domain, pruned, shape)
-
-def applyPruningAdaptive(domain):
-    value, shape = type_checking_and_return_lists(domain)
-    rnd_tmp = 1
-    pruned = []
-    prune_ratio = max(value) + 0.1
-    for i in range(len(value)):
-        if (abs(value[i]) < prune_ratio):
-            rnd_tmp = random.random()
-            if (abs(value[i]) > rnd_tmp * prune_ratio):
-                if (value[i] > 0):
-                    pruned.append(prune_ratio)
-                else:
-                    pruned.append(-prune_ratio)
-            else:
-                pruned.append(0)
-
     return type_checking_return_actual_dtype(domain, pruned, shape)
 
-# prunning with DP - read the paper referenced above for more info
-def applyPruningDP( domain, prune_ratio, sensitivity, epsilon):
+def applyPruningAdaptive(domain):
+    """
+    Applies adaptive pruning by determining a dynamic prune ratio.
+    The prune ratio is set as the maximum value plus a small constant.
+
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+
+    Returns:
+        Adaptively pruned data.
+    """
+    value, shape = type_checking_and_return_lists(domain)
+    pruned = []
+    prune_ratio = max(value) + 0.1  # Dynamic prune ratio
+    for i in range(len(value)):
+        if abs(value[i]) < prune_ratio:
+            rnd_tmp = random.random()
+            if abs(value[i]) > rnd_tmp * prune_ratio:
+                if value[i] > 0:
+                    pruned.append(prune_ratio)
+                else:
+                    pruned.append(-prune_ratio)
+            else:
+                pruned.append(0)
+    return type_checking_return_actual_dtype(domain, pruned, shape)
+
+def applyPruningDP(domain, prune_ratio, sensitivity, epsilon):
+    """
+    Applies pruning with differential privacy.
+    After pruning the values, Laplace noise is added to the pruned values.
+
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        prune_ratio (float): Pruning threshold.
+        sensitivity (float): Sensitivity of the data.
+        epsilon (float): Privacy parameter.
+
+    Returns:
+        Differentially private pruned data.
+    """
     value, shape = type_checking_and_return_lists(domain)
     tmpValue = applyPruning(value, prune_ratio)
     privatized = []
     for i in range(len(tmpValue)):
-        privatized.append(tmpValue[i] + np.random.laplace(loc=0, scale = sensitivity/epsilon))
+        privatized.append(tmpValue[i] + np.random.laplace(loc=0, scale=sensitivity / epsilon))
 
     return type_checking_return_actual_dtype(domain, privatized, shape)
 
-def unary_epsilon( p, q):
-    return np.log((p*(1-q)) / ((1-p)*q))
-
-
-def shuffle( a):
+def unary_epsilon(p, q):
     """
-    Simple
-    a = [[1,2,3], [4,5,6], [7,8,9]]  # lists of 1D parameters from clients for shuffling
-    result = shuffle(a) 
-    # result =  [[7, 8, 9], [1, 2, 3], [4, 5, 6]]
+    Computes the effective epsilon for unary encoding based on probabilities p and q.
+
+    Parameters:
+        p (float): Probability of preserving a bit.
+        q (float): Probability of flipping a bit to 1.
+
+    Returns:
+        The computed epsilon value.
     """
-    random.shuffle(a) 
+    return np.log((p * (1 - q)) / ((1 - p) * q))
+
+# -------------------------------
+# Miscellaneous Helper Functions
+# -------------------------------
+
+def shuffle(a):
+    """
+    Shuffles a list of lists in place.
+
+    Example:
+        a = [[1,2,3], [4,5,6], [7,8,9]]
+        result = shuffle(a) 
+        # The list 'a' will be randomly rearranged.
+    """
+    random.shuffle(a)
     return a
 
 def percentilePrivacy(domain, percentile):
     """
-    Applies percentile privacy by setting values below the given percentile to zero.
-    
-    Parameters:
-        data (list, array-like or tensor): The dataset to process.
-        percentile (float): The lower percentile threshold (0-100).
-        
-    Returns:
-        data: The data with values below the specified percentile to zero.
-    """
+    Applies percentile privacy by setting values below a specified percentile to zero.
 
+    Parameters:
+        domain: Input data (list, numpy array, or tensor).
+        percentile (float): Lower percentile threshold (0-100).
+
+    Returns:
+        Data with values below the percentile set to zero, in the same format as the input.
+    """
     if not 0 <= percentile <= 100:
         raise ValueError("percentile must be between 0 and 100.")
     
     data, shape = type_checking_and_return_lists(domain)
     data = np.array(data)
     
-    # Calculate the lower and upper bounds based on percentiles
+    # Determine the lower bound using the percentile.
     lower_bound = np.percentile(data, percentile)
     
-    # Set values outside the bounds to zero
+    # Replace values below the lower bound with zero.
     data = np.where((data >= lower_bound), data, 0)
-    
     data = data.tolist()
 
     return type_checking_return_actual_dtype(domain, data, shape)
 
+# -------------------------------
+# Data Conversion Helper Functions
+# -------------------------------
+
 def numpy_to_list(nd_array):
+    """
+    Converts a NumPy array to a flattened list and returns its original shape.
+
+    Parameters:
+        nd_array (np.ndarray): Input NumPy array.
+
+    Returns:
+        A tuple (flattened_list, original_shape).
+    """
     flattened_list = nd_array.flatten().tolist()
     nd_array_shape = nd_array.shape
-
     return flattened_list, nd_array_shape
 
 def list_to_numpy(flattened_list, nd_array_shape):
+    """
+    Converts a flattened list back to a NumPy array with the given shape.
+
+    Parameters:
+        flattened_list (list): Flattened list of values.
+        nd_array_shape (tuple): Desired shape for the NumPy array.
+
+    Returns:
+        A NumPy array with the specified shape.
+    """
     reverted_ndarray = np.array(flattened_list).reshape(nd_array_shape)
     return reverted_ndarray
 
 def torch_to_list(torch_tensor):
+    """
+    Converts a PyTorch tensor to a flattened list and returns its original shape.
+
+    Parameters:
+        torch_tensor (torch.Tensor): Input tensor.
+
+    Returns:
+        A tuple (flattened_list, original_shape).
+    """
     flattened_list = torch_tensor.flatten().tolist()
     tensor_shape = torch_tensor.shape
-
     return flattened_list, tensor_shape
 
 def list_to_torch(flattened_list, tensor_shape):
-    reverted_tensor =  torch.as_tensor(flattened_list).reshape(tensor_shape)
-    return reverted_tensor
+    """
+    Converts a flattened list back to a PyTorch tensor with the given shape.
 
+    Parameters:
+        flattened_list (list): Flattened list of values.
+        tensor_shape (tuple): Desired shape for the tensor.
+
+    Returns:
+        A PyTorch tensor with the specified shape.
+    """
+    reverted_tensor = torch.as_tensor(flattened_list).reshape(tensor_shape)
+    return reverted_tensor
