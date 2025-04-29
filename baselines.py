@@ -57,6 +57,8 @@ def type_checking_return_actual_dtype(domain, result, shape):
 # Differential Privacy Mechanisms
 # -------------------------------
 
+# Depending on your data, parameters for each privacy technique below will need to be changed. The default 
+# parameter might not be the best value and can affect the accuracy of your model
 def applyFlipCoin(probability, domain):
     """
     Applies a "flip coin" mechanism to each item in the input domain.
